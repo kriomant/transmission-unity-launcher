@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 """Unity launcher plugin for Transmission.
 
 Requires:
