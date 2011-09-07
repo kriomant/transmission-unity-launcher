@@ -120,14 +120,15 @@ def update_status(transmission):
 
 	# Calculate progress.
 	torrents_count = len(downloading_torrent_ids)
-	progress = float(total_size - left_size) / total_size
-	logging.info("Downloading torrents count: %d, progress: %f", torrents_count, progress)
+	if torrents_count > 0:
+		progress = float(total_size - left_size) / total_size
+		logging.info("Downloading torrents count: %d, progress: %f", torrents_count, progress)
 
-	# Set launcher properties.
-	launcher.set_property('count', torrents_count)
+		# Set launcher properties.
+		launcher.set_property('count', torrents_count)
+		launcher.set_property('progress', progress)
+
 	launcher.set_property('count_visible', torrents_count > 0)
-
-	launcher.set_property('progress', progress)
 	launcher.set_property('progress_visible', torrents_count > 0)
 
 def first_update():
