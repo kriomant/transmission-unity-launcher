@@ -4,6 +4,7 @@ What is this?
 This is small script for integrating Transmission with Unity Launcher.
 Transmission icon in launcher will show number of downloading torrents
 and total progress.
+Quicklist menu item allows to view and toggle "Turtle mode".
 
 Prerequisites
 =============

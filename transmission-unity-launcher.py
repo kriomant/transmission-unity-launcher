@@ -97,6 +97,16 @@ def is_connection_error(error):
 logging.debug("Get launcher entry %s", args.launcher_entry_name)
 launcher = Unity.LauncherEntry.get_for_desktop_id(args.launcher_entry_name)
 
+# Create menu.
+menu = Dbusmenu.Menuitem.new()
+turtle_mode_item = Dbusmenu.Menuitem.new()
+turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, "Turtle mode")
+turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
+turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_TOGGLE_TYPE, Dbusmenu.MENUITEM_TOGGLE_CHECK)
+turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, Dbusmenu.MENUITEM_TOGGLE_STATE_UNKNOWN)
+menu.child_append(turtle_mode_item)
+launcher.set_property('quicklist', menu)
+
 def update_status(transmission):
 	# Get list of torrents.
 	logging.debug("Get torrents list.")
@@ -131,6 +141,15 @@ def update_status(transmission):
 	launcher.set_property('count_visible', torrents_count > 0)
 	launcher.set_property('progress_visible', torrents_count > 0)
 
+	# Get session info.
+	session = transmission.get_session()
+
+	turtle_mode = session.alt_speed_enabled
+	logging.debug("Turtle mode: %s", turtle_mode)
+	# Constants are swapped to overcome Launcher bug.
+	menu_item_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+	turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, menu_item_state)
+
 def first_update():
 	try:
 		# Connect to Transmission.
@@ -156,6 +175,22 @@ def first_update():
 
 		# Try to update status for the first time.
 		update_status(transmission)
+
+		# Show quicklist items, add handlers.
+		turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
+		def toggle_turtle_mode(menuitem, _, data):
+			current_state = menuitem.property_get_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE)
+			# Constants are swapped to overcome Launcher bug.
+			turtle_mode = current_state == Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
+
+			turtle_mode = not turtle_mode
+			logging.info("Turtle mode: %s", turtle_mode)
+			transmission.set_session(alt_speed_enabled=turtle_mode)
+
+			# Constants are swapped to overcome Launcher bug.
+			new_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+			menuitem.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, new_state)
+		turtle_mode_item.connect('item-activated', toggle_turtle_mode, None)
 
 		# If all is ok, start main timer.
 		GObject.timeout_add_seconds(args.update_interval, periodic_update, transmission)
