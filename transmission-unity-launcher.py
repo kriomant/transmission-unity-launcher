@@ -19,6 +19,117 @@ import argparse
 from gi.repository import Unity, Gio, GLib, GObject, Dbusmenu
 import transmissionrpc
 
+class UnityLauncherEntry:
+	def __init__(self, name):
+		self.name = name
+
+		logging.debug("Get launcher entry %s", self.name)
+		self.entry = Unity.LauncherEntry.get_for_desktop_id(self.name)
+
+	def set_progress(self, progress):
+		if progress is not None:
+			self.entry.set_property('progress', progress)
+			self.entry.set_property('progress_visible', True)
+		else:
+			self.entry.set_property('progress_visible', False)
+
+	def set_count(self, count):
+		if count is not None:
+			self.entry.set_property('count', count)
+			self.entry.set_property('count_visible', True)
+		else:
+			self.entry.set_property('count_visible', False)
+
+	def set_quicklist_menu(self, menu):
+		self.entry.set_property('quicklist', menu)
+
+class TransmissionUnityController:
+	def __init__(self, transmission, launcher_entry, options):
+		logging.debug("Create controller.")
+
+		self.transmission = transmission
+		self.launcher_entry = launcher_entry
+		self.options = options
+
+		quicklist_menu = self._create_quicklist_menu()
+
+		# Show quicklist items, add handlers.
+		self.turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
+		self.turtle_mode_item.connect('item-activated', self._on_toggle_turtle_mode, None)
+
+		self.launcher_entry.set_quicklist_menu(quicklist_menu)
+
+	def update(self):
+		# Get list of torrents.
+		logging.debug("Get torrents list.")
+		torrents = self.transmission.list()
+
+		# Filter only downloading ones.
+		downloading_torrent_ids = [t.id for t in torrents.values() if t.status == 'downloading']
+
+		logging.debug("%d of %d are downloading", len(downloading_torrent_ids), len(torrents))
+
+		# Get detailed information about downloading torrents.
+		# 'id' fields is required by transmissionrpc to sort results and 'name' field
+		# is used by Torrent.__repr__.
+		infos = self.transmission.info(downloading_torrent_ids, ['id', 'name', 'sizeWhenDone', 'leftUntilDone'])
+
+		# Calculate total torrents size and downloaded amount.
+		total_size = left_size = 0
+		for info in infos.itervalues():
+			total_size += info.sizeWhenDone
+			left_size  += info.leftUntilDone
+
+		# Calculate progress.
+		torrents_count = len(downloading_torrent_ids)
+		if torrents_count > 0:
+			progress = float(total_size - left_size) / total_size
+			logging.info("Downloading torrents count: %d, progress: %f", torrents_count, progress)
+
+			# Set launcher entry properties.
+			self.launcher_entry.set_count(torrents_count)
+			self.launcher_entry.set_progress(progress)
+
+		else:
+			self.launcher_entry.set_count(None)
+			self.launcher_entry.set_progress(None)
+
+		# Get session info.
+		session = self.transmission.get_session()
+
+		turtle_mode = session.alt_speed_enabled
+		logging.debug("Turtle mode: %s", turtle_mode)
+		# Constants are swapped to overcome Launcher bug.
+		menu_item_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+		self.turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, menu_item_state)
+
+	def _create_quicklist_menu(self):
+		# Create menu.
+		menu = Dbusmenu.Menuitem.new()
+
+		turtle_mode_item = Dbusmenu.Menuitem.new()
+		turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, "Turtle mode")
+		turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
+		turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_TOGGLE_TYPE, Dbusmenu.MENUITEM_TOGGLE_CHECK)
+		turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, Dbusmenu.MENUITEM_TOGGLE_STATE_UNKNOWN)
+		self.turtle_mode_item = turtle_mode_item
+		menu.child_append(turtle_mode_item)
+
+		return menu
+
+	def _on_toggle_turtle_mode(menuitem, _, data):
+		current_state = menuitem.property_get_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE)
+		# Constants are swapped to overcome Launcher bug.
+		turtle_mode = current_state == Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
+
+		turtle_mode = not turtle_mode
+		logging.info("Turtle mode: %s", turtle_mode)
+		self.transmission.set_session(alt_speed_enabled=turtle_mode)
+
+		# Constants are swapped to overcome Launcher bug.
+		new_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+		menuitem.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, new_state)
+
 parser = argparse.ArgumentParser(description="Integrate Transmission into Unity Launcher.")
 parser.add_argument('-l', '--launcher-entry-name',
 	action='store', dest='launcher_entry_name',
@@ -64,23 +175,26 @@ logging.basicConfig(level=logging.DEBUG)
 
 loop = GObject.MainLoop()
 
-# Start transmission.
-flags = (
-	# Inherit PATH environment variable.
-	GLib.SpawnFlags.SEARCH_PATH |
+def start_process(command):
+	flags = (
+		# Inherit PATH environment variable.
+		GLib.SpawnFlags.SEARCH_PATH |
 
-	# Don't reap transmission process automatically so it is possible
-	# to detect when Transmission is closed.
-	GLib.SpawnFlags.DO_NOT_REAP_CHILD
-)
-_, transmission_pid = GLib.spawn_async(
-	None, # Inherit current directory,
-	args.transmission_command, # Command with arguments.
-	None, # Inherit environment.
-	flags,
-	None, # Child setup callback.
-	None  # User data.
-)
+		# Don't reap process automatically so it is possible
+		# to detect when it is closed.
+		GLib.SpawnFlags.DO_NOT_REAP_CHILD
+	)
+	_, pid = GLib.spawn_async(
+		None, # Inherit current directory,
+		command, # Command with arguments.
+		None, # Inherit environment.
+		flags,
+		None, # Child setup callback.
+		None  # User data.
+	)
+	return pid
+
+transmission_pid = start_process(args.transmission_command)
 logging.info("Transmission started (pid: %d).", transmission_pid)
 
 # Exit when Transmission is closed.
@@ -93,62 +207,6 @@ GLib.child_watch_add(GLib.PRIORITY_DEFAULT, transmission_pid, transmission_close
 def is_connection_error(error):
 	http_error_class = transmissionrpc.httphandler.HTTPHandlerError
 	return isinstance(error.original, http_error_class) and error.original.code == 111
-
-logging.debug("Get launcher entry %s", args.launcher_entry_name)
-launcher = Unity.LauncherEntry.get_for_desktop_id(args.launcher_entry_name)
-
-# Create menu.
-menu = Dbusmenu.Menuitem.new()
-turtle_mode_item = Dbusmenu.Menuitem.new()
-turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, "Turtle mode")
-turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
-turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_TOGGLE_TYPE, Dbusmenu.MENUITEM_TOGGLE_CHECK)
-turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, Dbusmenu.MENUITEM_TOGGLE_STATE_UNKNOWN)
-menu.child_append(turtle_mode_item)
-launcher.set_property('quicklist', menu)
-
-def update_status(transmission):
-	# Get list of torrents.
-	logging.debug("Get torrents list.")
-	torrents = transmission.list()
-
-	# Filter only downloading ones.
-	downloading_torrent_ids = [t.id for t in torrents.values() if t.status == 'downloading']
-
-	logging.debug("%d of %d are downloading", len(downloading_torrent_ids), len(torrents))
-
-	# Get detailed information about downloading torrents.
-	# 'id' fields is required by transmissionrpc to sort results and 'name' field
-	# is used by Torrent.__repr__.
-	infos = transmission.info(downloading_torrent_ids, ['id', 'name', 'sizeWhenDone', 'leftUntilDone'])
-
-	# Calculate total torrents size and downloaded amount.
-	total_size = left_size = 0
-	for info in infos.itervalues():
-		total_size += info.sizeWhenDone
-		left_size  += info.leftUntilDone
-
-	# Calculate progress.
-	torrents_count = len(downloading_torrent_ids)
-	if torrents_count > 0:
-		progress = float(total_size - left_size) / total_size
-		logging.info("Downloading torrents count: %d, progress: %f", torrents_count, progress)
-
-		# Set launcher properties.
-		launcher.set_property('count', torrents_count)
-		launcher.set_property('progress', progress)
-
-	launcher.set_property('count_visible', torrents_count > 0)
-	launcher.set_property('progress_visible', torrents_count > 0)
-
-	# Get session info.
-	session = transmission.get_session()
-
-	turtle_mode = session.alt_speed_enabled
-	logging.debug("Turtle mode: %s", turtle_mode)
-	# Constants are swapped to overcome Launcher bug.
-	menu_item_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
-	turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, menu_item_state)
 
 def first_update():
 	try:
@@ -173,27 +231,16 @@ def first_update():
 			else:
 				raise
 
+		launcher_entry = UnityLauncherEntry(args.launcher_entry_name)
+
+		# Create controller.
+		controller = TransmissionUnityController(transmission, launcher_entry, args)
+
 		# Try to update status for the first time.
-		update_status(transmission)
-
-		# Show quicklist items, add handlers.
-		turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
-		def toggle_turtle_mode(menuitem, _, data):
-			current_state = menuitem.property_get_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE)
-			# Constants are swapped to overcome Launcher bug.
-			turtle_mode = current_state == Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
-
-			turtle_mode = not turtle_mode
-			logging.info("Turtle mode: %s", turtle_mode)
-			transmission.set_session(alt_speed_enabled=turtle_mode)
-
-			# Constants are swapped to overcome Launcher bug.
-			new_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
-			menuitem.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, new_state)
-		turtle_mode_item.connect('item-activated', toggle_turtle_mode, None)
+		controller.update()
 
 		# If all is ok, start main timer.
-		GObject.timeout_add_seconds(args.update_interval, periodic_update, transmission)
+		GObject.timeout_add_seconds(args.update_interval, periodic_update, controller)
 
 	except transmissionrpc.transmission.TransmissionError as error:
 		loop.quit() # Terminate application loop.
@@ -207,9 +254,9 @@ Quit.
 	finally:
 		return False # Stop timer.
 
-def periodic_update(transmission):
+def periodic_update(controller):
 	try:
-		update_status(transmission)
+		controller.update()
 	except transmissionrpc.transmission.TransmissionError as error:
 		if is_connection_error(error):
 			logging.error("Connection to Transmission is lost.")
