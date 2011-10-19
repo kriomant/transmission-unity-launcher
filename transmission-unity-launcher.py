@@ -19,6 +19,34 @@ import argparse
 from gi.repository import Unity, Gio, GLib, GObject, Dbusmenu
 import transmissionrpc
 
+# Dirty hack.
+# GLib functions `spawn_async` and `child_watch_add` in `python-gobject` package
+# from Ubuntu 11.04 and 11.10 are completely different: they require arguments
+# in different order and returns different results.
+# Use adapter functions to work around.
+if (GLib.MAJOR_VERSION, GLib.MINOR_VERSION) < (2, 30):
+	def spawn_async(argv, flags):
+		_, pid = GLib.spawn_async(
+			None, # Inherit current directory,
+			argv, # Command with arguments.
+			None, # Inherit environment.
+			flags,
+			None, # Child setup callback.
+			None  # User data.
+		)
+		return pid
+
+	def child_watch_add(priority, pid, on_closed, data):
+		return GLib.child_watch_add(priority, pid, on_closed, data)
+
+else:
+	def spawn_async(argv, flags):
+		pid, _, _, _ = GLib.spawn_async(argv=argv, flags=flags)
+		return pid
+
+	def child_watch_add(priority, pid, on_closed, data):
+		return GLib.child_watch_add(priority=priority, pid=pid, function=on_closed, data=data)
+
 class UnityLauncherEntry:
 	def __init__(self, name):
 		self.name = name
@@ -184,14 +212,7 @@ def start_process(command):
 		# to detect when it is closed.
 		GLib.SpawnFlags.DO_NOT_REAP_CHILD
 	)
-	_, pid = GLib.spawn_async(
-		None, # Inherit current directory,
-		command, # Command with arguments.
-		None, # Inherit environment.
-		flags,
-		None, # Child setup callback.
-		None  # User data.
-	)
+	pid = spawn_async(command, flags)
 	return pid
 
 transmission_pid = start_process(args.transmission_command)
@@ -202,7 +223,7 @@ def transmission_closed(pid, status, data):
 	logging.info("Transmission exited with status %d, exiting.", status)
 	GLib.spawn_close_pid(pid)
 	loop.quit()
-GLib.child_watch_add(GLib.PRIORITY_DEFAULT, transmission_pid, transmission_closed, None)
+child_watch_add(GLib.PRIORITY_DEFAULT, transmission_pid, transmission_closed, None)
 
 def is_connection_error(error):
 	http_error_class = transmissionrpc.httphandler.HTTPHandlerError
