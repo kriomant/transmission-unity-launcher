@@ -47,6 +47,20 @@ else:
 	def child_watch_add(priority, pid, on_closed, data):
 		return GLib.child_watch_add(priority=priority, pid=pid, function=on_closed, data=data)
 
+# Another dirty hack.
+# transmissionrpc in Ubuntu 12.04 fails trying to return
+# information about torrent because it tries to find corresponding
+# field in torrent.fields with simple string key while information
+# in torrent.fields is stored with unicode names.
+# This method tries to get value using property (for compatibility
+# with older versions) and in case of error tries to get value by
+# unicode name.
+def get_torrent_field(torrent, field_name):
+	try:
+		return getattr(torrent, field_name)
+	except KeyError:
+		return torrent.fields[unicode(field_name)]
+
 class UnityLauncherEntry:
 	def __init__(self, name):
 		self.name = name
@@ -93,7 +107,7 @@ class TransmissionUnityController:
 		torrents = self.transmission.list()
 
 		# Filter only downloading ones.
-		downloading_torrent_ids = [t.id for t in torrents.values() if t.status == 'downloading']
+		downloading_torrent_ids = [t.id for t in torrents.values() if get_torrent_field(t, 'status') == 'downloading']
 
 		logging.debug("%d of %d are downloading", len(downloading_torrent_ids), len(torrents))
 
