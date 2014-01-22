@@ -24,7 +24,9 @@ import transmissionrpc
 # from Ubuntu 11.04 and 11.10 are completely different: they require arguments
 # in different order and returns different results.
 # Use adapter functions to work around.
-if (GLib.MAJOR_VERSION, GLib.MINOR_VERSION) < (2, 30):
+
+(major, minor) = (GLib.MAJOR_VERSION, GLib.MINOR_VERSION)
+if (major, minor) < (2, 30):
 	def spawn_async(argv, flags):
 		_, pid = GLib.spawn_async(
 			None, # Inherit current directory,
@@ -34,6 +36,14 @@ if (GLib.MAJOR_VERSION, GLib.MINOR_VERSION) < (2, 30):
 			None, # Child setup callback.
 			None  # User data.
 		)
+		return pid
+
+	def child_watch_add(priority, pid, on_closed, data):
+		return GLib.child_watch_add(priority, pid, on_closed, data)
+
+elif (major, minor) >= (2, 38):
+	def spawn_async(argv, flags):
+		pid, _, _, _ = GLib.spawn_async(argv, flags=flags)
 		return pid
 
 	def child_watch_add(priority, pid, on_closed, data):
