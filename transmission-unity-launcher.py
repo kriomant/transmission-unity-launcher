@@ -41,7 +41,7 @@ if (major, minor) < (2, 30):
 	def child_watch_add(priority, pid, on_closed, data):
 		return GLib.child_watch_add(priority, pid, on_closed, data)
 
-elif (major, minor) >= (2, 38):
+elif (major, minor) >= (2, 36):
 	def spawn_async(argv, flags):
 		pid, _, _, _ = GLib.spawn_async(argv, flags=flags)
 		return pid
