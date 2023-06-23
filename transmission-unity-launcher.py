@@ -12,10 +12,11 @@ References:
 	transmissionrpc documentation: http://packages.python.org/transmissionrpc/
 	https://blueprints.launchpad.net/ubuntu/+spec/desktop-o-default-apps-unity-integration
 """
-import sys
+import sys, gi
 import logging
 import argparse
 
+gi.require_version('Unity', '7.0')
 from gi.repository import Unity, Gio, GLib, GObject, Dbusmenu
 import transmissionrpc
 
@@ -124,11 +125,11 @@ class TransmissionUnityController:
 		# Get detailed information about downloading torrents.
 		# 'id' fields is required by transmissionrpc to sort results and 'name' field
 		# is used by Torrent.__repr__.
-		infos = self.transmission.info(downloading_torrent_ids, ['id', 'name', 'sizeWhenDone', 'leftUntilDone'])
+		infos = self.transmission.get_torrents(downloading_torrent_ids, ['id', 'name', 'sizeWhenDone', 'leftUntilDone'])
 
 		# Calculate total torrents size and downloaded amount.
 		total_size = left_size = 0
-		for info in infos.itervalues():
+		for info in infos:
 			total_size += info.sizeWhenDone
 			left_size  += info.leftUntilDone
 
@@ -151,14 +152,13 @@ class TransmissionUnityController:
 
 		turtle_mode = session.alt_speed_enabled
 		logging.debug("Turtle mode: %s", turtle_mode)
-		# Constants are swapped to overcome Launcher bug.
-		menu_item_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+
+		menu_item_state = Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
 		self.turtle_mode_item.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, menu_item_state)
 
 	def _create_quicklist_menu(self):
 		# Create menu.
 		menu = Dbusmenu.Menuitem.new()
-
 		turtle_mode_item = Dbusmenu.Menuitem.new()
 		turtle_mode_item.property_set(Dbusmenu.MENUITEM_PROP_LABEL, "Turtle mode")
 		turtle_mode_item.property_set_bool(Dbusmenu.MENUITEM_PROP_VISIBLE, True)
@@ -169,17 +169,15 @@ class TransmissionUnityController:
 
 		return menu
 
-	def _on_toggle_turtle_mode(menuitem, _, data):
+	def _on_toggle_turtle_mode(self, menuitem, _, data):
 		current_state = menuitem.property_get_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE)
-		# Constants are swapped to overcome Launcher bug.
-		turtle_mode = current_state == Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
+		turtle_mode = current_state == Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
 
 		turtle_mode = not turtle_mode
 		logging.info("Turtle mode: %s", turtle_mode)
 		self.transmission.set_session(alt_speed_enabled=turtle_mode)
 
-		# Constants are swapped to overcome Launcher bug.
-		new_state = Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED
+		new_state = Dbusmenu.MENUITEM_TOGGLE_STATE_CHECKED if turtle_mode else Dbusmenu.MENUITEM_TOGGLE_STATE_UNCHECKED
 		menuitem.property_set_int(Dbusmenu.MENUITEM_PROP_TOGGLE_STATE, new_state)
 
 parser = argparse.ArgumentParser(description="Integrate Transmission into Unity Launcher.")
@@ -214,7 +212,7 @@ parser.add_argument('-t', '--startup-timeout',
 )
 parser.add_argument('-u', '--update-interval',
 	action='store', dest='update_interval', type=int,
-	default=20,
+	default=10,
 	help="interval (in seconds) between status updates"
 )
 parser.add_argument('transmission_command',
@@ -225,7 +223,7 @@ args = parser.parse_args()
 
 logging.basicConfig(level=logging.DEBUG)
 
-loop = GObject.MainLoop()
+loop = GLib.MainLoop()
 
 def start_process(command):
 	flags = (
@@ -285,14 +283,12 @@ def first_update():
 		controller.update()
 
 		# If all is ok, start main timer.
-		GObject.timeout_add_seconds(args.update_interval, periodic_update, controller)
+		GLib.timeout_add_seconds(args.update_interval, periodic_update, controller)
 
 	except transmissionrpc.transmission.TransmissionError as error:
 		loop.quit() # Terminate application loop.
 		if is_connection_error(error):
-			sys.stderr.write("""Can't connect to Transmission.
-Quit.
-""")
+			sys.stderr.write("""Can't connect to Transmission. Quit.""")
 		else:
 			raise
 
@@ -305,9 +301,7 @@ def periodic_update(controller):
 	except transmissionrpc.transmission.TransmissionError as error:
 		if is_connection_error(error):
 			logging.error("Connection to Transmission is lost.")
-			sys.stderr.write("""Connection to Transmission is lost.
-Quit.
-""")
+			sys.stderr.write("""Connection to Transmission is lost. Quit.""")
 			loop.quit() # Terminate application loop.
 			return False # Stop timer.
 		else:
@@ -316,7 +310,6 @@ Quit.
 
 	return True # Leave timer active.
 
-GObject.timeout_add_seconds(args.startup_timeout, first_update)
+GLib.timeout_add_seconds(args.startup_timeout, first_update)
 
 loop.run()
-
